@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Downloaded and generated data (run scripts to reproduce)
+data/raw/*
+data/processed/*
+data/metadata/*
+
+# Generated outputs
+outputs/tables/*
+outputs/figures/*
+outputs/reports/*
+
+# Keep directory structure in git
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/metadata/.gitkeep
+!outputs/tables/.gitkeep
+!outputs/figures/.gitkeep
+!outputs/reports/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+*.env
