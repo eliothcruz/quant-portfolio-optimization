@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/run_portfolio.py)",
+      "Bash(python scripts/run_backtest.py)",
+      "Bash(python scripts/run_strategy_comparison.py)",
+      "Bash(pip install *)"
+    ]
+  }
+}

@@ -2,9 +2,14 @@
 
 The covariance matrix is the core input to portfolio optimization.
 Annualization follows the standard scaling: Sigma_annual = Sigma_daily * 252.
+
+Phase 8 adds Ledoit-Wolf shrinkage estimation for improved stability
+in rolling-window contexts where the sample covariance is noisy.
 """
 
+import numpy as np
 import pandas as pd
+from sklearn.covariance import LedoitWolf
 
 from ..utils.logger import get_logger
 
@@ -50,6 +55,55 @@ def compute_covariance_matrix(
     label = "annualized" if annualize else "period"
     logger.info(
         f"Covariance matrix computed ({label}): "
+        f"{cov.shape[0]}x{cov.shape[1]}  assets={list(cov.columns)}"
+    )
+    return cov
+
+
+def compute_shrinkage_covariance(
+    returns: pd.DataFrame,
+    annualize: bool = True,
+    periods_per_year: int = _DEFAULT_PERIODS,
+) -> pd.DataFrame:
+    """Compute a Ledoit-Wolf shrinkage covariance matrix.
+
+    Ledoit-Wolf analytically determines the optimal linear shrinkage
+    intensity between the sample covariance and a scaled identity matrix,
+    reducing estimation error in small-window regimes (T < 5*n).
+
+    The daily shrinkage estimate is annualized by multiplying by
+    periods_per_year, identical to compute_covariance_matrix.
+
+    Args:
+        returns: DataFrame of daily returns (DatetimeIndex, columns=tickers).
+        annualize: If True, multiply daily covariance by periods_per_year.
+        periods_per_year: Trading days per year (default 252).
+
+    Returns:
+        DataFrame of shape (n_assets, n_assets) — same layout as
+        compute_covariance_matrix output.
+
+    Raises:
+        ValueError: If returns is empty or has fewer than 2 observations.
+    """
+    if returns.empty:
+        raise ValueError("compute_shrinkage_covariance: returns DataFrame is empty")
+    if len(returns) < 2:
+        raise ValueError(
+            "compute_shrinkage_covariance: need at least 2 observations"
+        )
+
+    lw = LedoitWolf()
+    lw.fit(returns.values)
+
+    factor = periods_per_year if annualize else 1
+    cov_arr = lw.covariance_ * factor
+
+    cov = pd.DataFrame(cov_arr, index=returns.columns, columns=returns.columns)
+
+    label = "annualized" if annualize else "period"
+    logger.info(
+        f"Shrinkage covariance computed ({label}, alpha={lw.shrinkage_:.4f}): "
         f"{cov.shape[0]}x{cov.shape[1]}  assets={list(cov.columns)}"
     )
     return cov

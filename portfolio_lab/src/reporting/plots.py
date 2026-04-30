@@ -462,6 +462,292 @@ def plot_cumulative_returns(
     return fig
 
 
+def plot_efficient_frontier(
+    frontier_df: pd.DataFrame,
+    mean_returns: pd.Series,
+    volatilities: pd.Series,
+    min_var_point: dict,
+    max_sharpe_point: dict,
+) -> plt.Figure:
+    """Plot the efficient frontier with individual assets and key portfolios.
+
+    Args:
+        frontier_df: DataFrame with columns 'return' and 'volatility'.
+        mean_returns: Annualized asset mean returns, indexed by ticker.
+        volatilities: Annualized asset volatilities, indexed by ticker.
+        min_var_point: Dict with keys 'return' and 'volatility'.
+        max_sharpe_point: Dict with keys 'return', 'volatility', and 'sharpe'.
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If frontier_df is empty.
+    """
+    if frontier_df.empty:
+        raise ValueError("plot_efficient_frontier: frontier_df is empty")
+
+    tickers = mean_returns.index.tolist()
+    asset_vols = volatilities.reindex(mean_returns.index).values
+    asset_rets = mean_returns.values
+
+    fig, ax = plt.subplots(figsize=(11, 7))
+
+    ax.plot(
+        frontier_df["volatility"],
+        frontier_df["return"],
+        color="navy",
+        linewidth=2.0,
+        zorder=2,
+        label="Efficient Frontier",
+    )
+
+    ax.scatter(
+        asset_vols, asset_rets,
+        s=80,
+        color="steelblue",
+        edgecolors="black",
+        linewidths=0.5,
+        zorder=3,
+        label="Assets",
+    )
+
+    for ticker, v, r in zip(tickers, asset_vols, asset_rets):
+        ax.annotate(
+            ticker,
+            xy=(v, r),
+            xytext=(6, 4),
+            textcoords="offset points",
+            fontsize=9,
+        )
+
+    mv = min_var_point
+    ax.scatter(
+        mv["volatility"], mv["return"],
+        s=180,
+        marker="D",
+        color="green",
+        edgecolors="darkgreen",
+        linewidths=0.8,
+        zorder=4,
+        label=f"Min Variance  ret={mv['return']:.2%}  vol={mv['volatility']:.2%}",
+    )
+
+    ms = max_sharpe_point
+    ax.scatter(
+        ms["volatility"], ms["return"],
+        s=220,
+        marker="*",
+        color="red",
+        edgecolors="darkred",
+        linewidths=0.8,
+        zorder=4,
+        label=(
+            f"Max Sharpe  ret={ms['return']:.2%}  "
+            f"vol={ms['volatility']:.2%}  SR={ms.get('sharpe', 0.0):.2f}"
+        ),
+    )
+
+    ax.axhline(0.0, color="grey", linewidth=0.7, linestyle="--")
+    ax.set_title("Efficient Frontier — Markowitz Mean-Variance", fontsize=13)
+    ax.set_xlabel("Volatility (Annualized)", fontsize=11)
+    ax.set_ylabel("Expected Return (Annualized)", fontsize=11)
+    ax.legend(fontsize=9, loc="upper left")
+
+    plt.tight_layout()
+    logger.info(
+        f"Efficient frontier chart created: {len(frontier_df)} frontier points, "
+        f"{len(tickers)} assets"
+    )
+    return fig
+
+
+def plot_backtest_results(
+    portfolio_returns: pd.Series,
+    benchmark_returns: pd.Series,
+    weights_history: pd.DataFrame,
+) -> plt.Figure:
+    """Plot backtest performance: cumulative returns, drawdown, and weight evolution.
+
+    Three stacked panels:
+        1. Cumulative returns — portfolio vs benchmark
+        2. Portfolio drawdown
+        3. Weight allocation at each rebalance date (stacked area)
+
+    Args:
+        portfolio_returns: Daily portfolio return series (DatetimeIndex).
+        benchmark_returns: Daily benchmark return series, aligned to the
+            same DatetimeIndex as portfolio_returns.
+        weights_history: DataFrame of portfolio weights at each rebalance
+            date (DatetimeIndex, columns=tickers).
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If portfolio_returns or benchmark_returns is empty.
+    """
+    if portfolio_returns.empty:
+        raise ValueError("plot_backtest_results: portfolio_returns is empty")
+    if benchmark_returns.empty:
+        raise ValueError("plot_backtest_results: benchmark_returns is empty")
+
+    bm_aligned = benchmark_returns.reindex(portfolio_returns.index).fillna(0.0)
+
+    cum_port = (1 + portfolio_returns).cumprod() - 1
+    cum_bm = (1 + bm_aligned).cumprod() - 1
+
+    cum_val = (1 + portfolio_returns).cumprod()
+    rolling_max = cum_val.expanding().max()
+    drawdown = (cum_val - rolling_max) / rolling_max
+
+    fig, axes = plt.subplots(3, 1, figsize=(14, 12))
+    fig.subplots_adjust(hspace=0.45)
+
+    # Panel 1: cumulative returns
+    ax1 = axes[0]
+    ax1.plot(
+        cum_port.index, cum_port.values,
+        color="steelblue", linewidth=2.0, label="Portfolio",
+    )
+    ax1.plot(
+        cum_bm.index, cum_bm.values,
+        color="darkorange", linewidth=1.5, linestyle="--", label="Benchmark",
+    )
+    ax1.axhline(0.0, color="grey", linewidth=0.7, linestyle=":")
+    ax1.set_title("Cumulative Returns — Portfolio vs Benchmark", fontsize=12)
+    ax1.set_ylabel("Cumulative Return", fontsize=10)
+    ax1.legend(fontsize=9)
+    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+    # Panel 2: drawdown
+    ax2 = axes[1]
+    ax2.fill_between(drawdown.index, drawdown.values, 0.0, color="crimson", alpha=0.4)
+    ax2.plot(drawdown.index, drawdown.values, color="darkred", linewidth=1.0)
+    ax2.axhline(0.0, color="grey", linewidth=0.7, linestyle=":")
+    ax2.set_title("Portfolio Drawdown", fontsize=12)
+    ax2.set_ylabel("Drawdown", fontsize=10)
+    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+    # Panel 3: weight evolution (stacked area)
+    ax3 = axes[2]
+    if not weights_history.empty:
+        tickers = list(weights_history.columns)
+        colors = plt.cm.tab10.colors
+        ax3.stackplot(
+            weights_history.index,
+            [weights_history[t].fillna(0.0).values for t in tickers],
+            labels=tickers,
+            colors=[colors[i % len(colors)] for i in range(len(tickers))],
+            alpha=0.85,
+        )
+        ax3.set_ylim(0, 1.02)
+        ax3.legend(fontsize=9, loc="upper left")
+    ax3.set_title("Weight Allocation at Each Rebalance Date", fontsize=12)
+    ax3.set_ylabel("Weight", fontsize=10)
+
+    plt.tight_layout()
+    logger.info(
+        f"Backtest chart created: {len(portfolio_returns)} obs, "
+        f"{len(weights_history)} rebalance dates"
+    )
+    return fig
+
+
+def plot_strategy_comparison(
+    strategy_returns: dict,
+    benchmark_returns: pd.Series,
+    comparison_df: pd.DataFrame,
+) -> plt.Figure:
+    """Compare multiple portfolio strategies: cumulative returns, drawdown, Sharpe.
+
+    Three stacked panels:
+        1. Cumulative returns for all strategies plus the benchmark.
+        2. Drawdown for all strategies.
+        3. Horizontal bar chart of Sharpe ratios.
+
+    Args:
+        strategy_returns: Dict mapping strategy_name -> pd.Series of daily returns.
+        benchmark_returns: Benchmark return series (aligned to strategy period).
+        comparison_df: Output of build_strategy_comparison_table (strategies × metrics).
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If strategy_returns is empty.
+    """
+    if not strategy_returns:
+        raise ValueError("plot_strategy_comparison: strategy_returns is empty")
+
+    ref_index = next(iter(strategy_returns.values())).index
+    bm_aligned = benchmark_returns.reindex(ref_index).fillna(0.0)
+
+    colors = plt.cm.tab10.colors
+    strategy_names = list(strategy_returns.keys())
+
+    fig, axes = plt.subplots(3, 1, figsize=(14, 13))
+    fig.subplots_adjust(hspace=0.45)
+
+    # Panel 1: cumulative returns
+    ax1 = axes[0]
+    for i, name in enumerate(strategy_names):
+        cum = (1 + strategy_returns[name]).cumprod() - 1
+        ax1.plot(cum.index, cum.values, color=colors[i], linewidth=1.8, label=name)
+    cum_bm = (1 + bm_aligned).cumprod() - 1
+    ax1.plot(
+        cum_bm.index, cum_bm.values,
+        color="black", linewidth=1.4, linestyle="--", label="SPY",
+    )
+    ax1.axhline(0.0, color="grey", linewidth=0.7, linestyle=":")
+    ax1.set_title("Cumulative Returns by Strategy", fontsize=12)
+    ax1.set_ylabel("Cumulative Return", fontsize=10)
+    ax1.legend(fontsize=9, loc="upper left")
+    ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+    # Panel 2: drawdown
+    ax2 = axes[1]
+    for i, name in enumerate(strategy_names):
+        cum_val = (1 + strategy_returns[name]).cumprod()
+        dd = (cum_val - cum_val.expanding().max()) / cum_val.expanding().max()
+        ax2.plot(dd.index, dd.values, color=colors[i], linewidth=1.5, alpha=0.85, label=name)
+    ax2.axhline(0.0, color="grey", linewidth=0.7, linestyle=":")
+    ax2.set_title("Drawdown by Strategy", fontsize=12)
+    ax2.set_ylabel("Drawdown", fontsize=10)
+    ax2.legend(fontsize=9, loc="lower left")
+    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.0%}"))
+
+    # Panel 3: Sharpe ratio bar chart
+    ax3 = axes[2]
+    if "sharpe_ratio" in comparison_df.columns:
+        sharpe = comparison_df["sharpe_ratio"].astype(float)
+        y_pos = np.arange(len(sharpe))
+        bar_colors = [colors[strategy_names.index(s) % len(colors)] for s in sharpe.index]
+        bars = ax3.barh(
+            y_pos, sharpe.values,
+            color=bar_colors, edgecolor="black", linewidth=0.4,
+        )
+        for bar, val in zip(bars, sharpe.values):
+            ax3.text(
+                bar.get_width() + 0.005,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:.3f}",
+                va="center", ha="left", fontsize=9,
+            )
+        ax3.set_yticks(y_pos)
+        ax3.set_yticklabels(sharpe.index, fontsize=10)
+        ax3.set_xlabel("Sharpe Ratio", fontsize=10)
+        ax3.set_title("Sharpe Ratio by Strategy", fontsize=12)
+        ax3.set_xlim(0, max(sharpe.values) * 1.2)
+    ax3.axvline(0.0, color="grey", linewidth=0.6)
+
+    plt.tight_layout()
+    logger.info(
+        f"Strategy comparison chart created: {len(strategy_names)} strategies"
+    )
+    return fig
+
+
 def plot_price_series(prices: pd.DataFrame) -> plt.Figure:
     """Plot normalized (base-100) price series for all assets.
 

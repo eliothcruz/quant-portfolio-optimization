@@ -208,3 +208,35 @@ def build_risk_comparison_table(
         f"({len(asset_risk_table)} assets + 1 portfolio)"
     )
     return combined
+
+
+def build_strategy_comparison_table(results: dict) -> pd.DataFrame:
+    """Build a strategies × metrics comparison table.
+
+    Args:
+        results: Dict mapping strategy_name -> {"metrics": dict, ...}
+            as returned by run_strategy_comparison after augmenting each
+            entry with a "metrics" key from compute_strategy_metrics.
+
+    Returns:
+        DataFrame with strategy names as the index and metric names as
+        columns, sorted by sharpe_ratio descending.
+
+    Raises:
+        ValueError: If results is empty.
+    """
+    if not results:
+        raise ValueError("build_strategy_comparison_table: results dict is empty")
+
+    rows = {name: data["metrics"] for name, data in results.items()}
+    df = pd.DataFrame(rows).T
+    df.index.name = "strategy"
+
+    if "sharpe_ratio" in df.columns:
+        df = df.sort_values("sharpe_ratio", ascending=False)
+
+    logger.info(
+        f"Strategy comparison table built: {len(df)} strategies, "
+        f"{len(df.columns)} metrics"
+    )
+    return df
