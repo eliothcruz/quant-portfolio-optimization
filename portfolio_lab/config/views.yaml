@@ -1,0 +1,37 @@
+# Black-Litterman investor views configuration
+#
+# These values define the subjective views used in the Black-Litterman model.
+# They represent the investor's beliefs RELATIVE to equilibrium, not
+# recommendations or investment advice.
+#
+# Tickers must exist in config/assets.yaml.
+
+# ── Absolute views ─────────────────────────────────────────────────────────────
+# Each entry states: "I expect <ticker> to return <value> annualized."
+# Values are annualized returns expressed as decimals (0.18 = 18%).
+absolute_views:
+  AAPL: 0.18
+  MSFT: 0.15
+
+# ── Relative views ─────────────────────────────────────────────────────────────
+# Each entry states: "I expect <long> to outperform <short> by <view_return>."
+# view_return is the expected annualized return differential.
+relative_views:
+  - long: AAPL
+    short: KO
+    view_return: 0.05
+
+# ── Black-Litterman model parameters ──────────────────────────────────────────
+black_litterman:
+  # tau: scales the uncertainty of the prior (equilibrium) returns.
+  # Smaller tau -> more trust in the prior; larger -> more weight on views.
+  # Typical range: 0.01 to 0.10.
+  tau: 0.05
+
+  # risk_aversion: coefficient delta used to compute pi = delta * Sigma * w.
+  # Typical range: 2 to 4 for equity portfolios.
+  risk_aversion: 2.5
+
+  # confidence: investor confidence in the stated views, in (0, 1].
+  # 1.0 = full confidence; 0.5 = moderate (uncertainty doubled).
+  confidence: 0.5

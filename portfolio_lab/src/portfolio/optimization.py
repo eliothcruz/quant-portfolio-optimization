@@ -1,5 +1,6 @@
-"""Portfolio optimization: minimum variance (Phase 2) and
-maximum Sharpe ratio + efficient frontier (Phase 6).
+"""Portfolio optimization: minimum variance (Phase 2),
+maximum Sharpe ratio + efficient frontier (Phase 6),
+and Black-Litterman max Sharpe (Phase 9).
 
 Uses scipy.optimize.minimize with the SLSQP solver.
 Constraints: long-only (w_i >= 0) and fully invested (sum(w) == 1).
@@ -357,3 +358,46 @@ def efficient_frontier(
         f"Efficient frontier computed: {len(frontier_df)}/{n_points} feasible points"
     )
     return frontier_df
+
+
+def black_litterman_max_sharpe_portfolio(
+    mu_bl: pd.Series,
+    cov_matrix: pd.DataFrame | np.ndarray,
+    risk_free_rate: float = 0.0,
+) -> dict:
+    """Find the maximum Sharpe portfolio using Black-Litterman posterior returns.
+
+    This is a thin, clearly-labelled wrapper around max_sharpe_portfolio that
+    makes explicit that the expected return input is mu_bl (the BL posterior)
+    rather than historical mean returns.
+
+    The covariance matrix is left unchanged — Black-Litterman only adjusts
+    expected returns, not the covariance structure.
+
+    Args:
+        mu_bl: (n,) BL posterior expected returns as a pd.Series indexed
+            by ticker. Produced by black_litterman.black_litterman_posterior_returns.
+        cov_matrix: (n, n) annualized covariance matrix.
+        risk_free_rate: Annualized risk-free rate (default 0.0).
+
+    Returns:
+        Dict with keys:
+            weights    - pd.Series indexed by ticker
+            return     - float, annualized portfolio expected return (BL)
+            volatility - float, annualized portfolio volatility
+            sharpe     - float, Sharpe ratio using BL returns
+
+    Raises:
+        ValueError: If mu_bl and cov_matrix are dimensionally inconsistent.
+        RuntimeError: If the SLSQP solver does not converge.
+    """
+    logger.info(
+        "Black-Litterman Max Sharpe optimization — "
+        "using BL posterior returns as expected return estimates"
+    )
+    result = max_sharpe_portfolio(mu_bl, cov_matrix, risk_free_rate=risk_free_rate)
+    logger.info(
+        f"BL Max Sharpe | ret={result['return']:.4f}  "
+        f"vol={result['volatility']:.4f}  SR={result['sharpe']:.4f}"
+    )
+    return result

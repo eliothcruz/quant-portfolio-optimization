@@ -748,6 +748,126 @@ def plot_strategy_comparison(
     return fig
 
 
+def plot_black_litterman_returns_comparison(
+    pi: pd.Series,
+    mu_bl: pd.Series,
+    historical_mu: pd.Series,
+) -> plt.Figure:
+    """Grouped bar chart comparing historical, equilibrium, and BL posterior returns.
+
+    Three bars per asset allow direct visual inspection of how the BL model
+    pulls expected returns away from noisy historical means toward the
+    equilibrium prior, guided by investor views.
+
+    Args:
+        pi: Equilibrium implied returns, indexed by ticker.
+        mu_bl: Black-Litterman posterior returns, indexed by ticker.
+        historical_mu: Historical annualized mean returns, indexed by ticker.
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If any of the three Series is empty.
+    """
+    for name, s in [("pi", pi), ("mu_bl", mu_bl), ("historical_mu", historical_mu)]:
+        if s.empty:
+            raise ValueError(
+                f"plot_black_litterman_returns_comparison: '{name}' is empty"
+            )
+
+    tickers = list(historical_mu.index)
+    n = len(tickers)
+    x = np.arange(n)
+    width = 0.26
+
+    hist_vals = historical_mu.reindex(tickers).values
+    pi_vals = pi.reindex(tickers).values
+    bl_vals = mu_bl.reindex(tickers).values
+
+    fig, ax = plt.subplots(figsize=(max(9, n * 2), 6))
+
+    ax.bar(x - width, hist_vals, width, label="Historical Mean",
+           color="steelblue", edgecolor="black", linewidth=0.4)
+    ax.bar(x,         pi_vals,   width, label="Equilibrium (pi)",
+           color="darkorange", edgecolor="black", linewidth=0.4)
+    ax.bar(x + width, bl_vals,   width, label="BL Posterior (mu_BL)",
+           color="green", edgecolor="black", linewidth=0.4)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(tickers, fontsize=10)
+    ax.axhline(0.0, color="grey", linewidth=0.7, linestyle="--")
+    ax.set_title(
+        "Expected Returns Comparison — Historical vs Equilibrium vs Black-Litterman",
+        fontsize=12,
+    )
+    ax.set_ylabel("Annualized Return", fontsize=11)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.0%}"))
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    logger.info(
+        f"BL returns comparison chart created: {n} assets"
+    )
+    return fig
+
+
+def plot_black_litterman_weights(
+    weights: pd.Series,
+    title: str = "Black-Litterman Max Sharpe — Weight Allocation",
+) -> plt.Figure:
+    """Horizontal bar chart for Black-Litterman optimal weights.
+
+    Reuses the same layout as plot_portfolio_weights with a customizable title
+    so both charts can appear in the same report without confusion.
+
+    Args:
+        weights: pd.Series of portfolio weights indexed by ticker.
+        title: Chart title (default labels the chart as BL Max Sharpe).
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If weights is empty or contains NaN values.
+    """
+    if weights.empty:
+        raise ValueError("plot_black_litterman_weights: weights is empty")
+    if weights.isna().any():
+        raise ValueError("plot_black_litterman_weights: weights contains NaN values")
+
+    tickers = weights.index.tolist()
+    values = weights.values
+    y_pos = np.arange(len(tickers))
+
+    fig, ax = plt.subplots(figsize=(9, max(3, len(tickers) * 0.7)))
+
+    bars = ax.barh(y_pos, values, color="mediumseagreen",
+                   edgecolor="black", linewidth=0.4)
+
+    for bar, val in zip(bars, values):
+        ax.text(
+            bar.get_width() + 0.002,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.1%}",
+            va="center", ha="left", fontsize=9,
+        )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(tickers, fontsize=10)
+    ax.set_xlabel("Weight", fontsize=11)
+    ax.set_title(title, fontsize=13)
+    ax.set_xlim(0, max(values) * 1.18)
+    ax.axvline(0.0, color="black", linewidth=0.6)
+
+    plt.tight_layout()
+    logger.info(
+        f"BL weights chart created: {len(weights)} assets, "
+        f"total weight = {values.sum():.6f}"
+    )
+    return fig
+
+
 def plot_price_series(prices: pd.DataFrame) -> plt.Figure:
     """Plot normalized (base-100) price series for all assets.
 
