@@ -1,0 +1,36 @@
+# Factor analysis configuration
+#
+# Fama-French factors must be placed locally in data/factors/ before running
+# scripts/run_factor_analysis.py. This pipeline does NOT download factor data
+# automatically to avoid dependency on an external service.
+#
+# How to obtain the factor file:
+#   1. Visit the Kenneth French Data Library:
+#      https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html
+#   2. Download "Fama/French 3 Factors (Daily)"
+#   3. Convert to CSV with the column layout below and save to:
+#      data/factors/fama_french_3_factors.csv
+#
+# Required CSV format:
+#   date,MKT_RF,SMB,HML,RF
+#   2019-01-02,0.31,-0.10,0.05,0.01
+#   ...
+#
+# IMPORTANT — unit consistency:
+#   Kenneth French distributes factors in PERCENT (0.31 means 0.31%).
+#   Asset returns in this pipeline are in DECIMAL (0.0031 means 0.31%).
+#   If your factor file uses percent, set convert_percent_to_decimal: true.
+
+factor_file: data/factors/fama_french_3_factors.csv
+
+# Model used by default in run_factor_analysis.py
+# Options: 'capm', 'ff3'
+default_model: ff3
+
+# Minimum number of overlapping observations required for reliable regression.
+# Below this threshold a warning is issued but execution continues.
+min_observations: 252
+
+# Set to true if factor values are in percent (e.g., from Kenneth French raw files).
+# This divides MKT_RF, SMB, HML, and RF by 100 before regression.
+convert_percent_to_decimal: true

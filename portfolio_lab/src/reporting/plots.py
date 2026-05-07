@@ -868,6 +868,251 @@ def plot_black_litterman_weights(
     return fig
 
 
+def plot_factor_betas(
+    factor_results_df: pd.DataFrame,
+    title: str = "Factor Betas",
+) -> plt.Figure:
+    """Grouped bar chart of factor loadings per asset or strategy.
+
+    Plots beta_mkt always; also plots beta_smb and beta_hml when they are
+    present and non-NaN. Works for both CAPM (market beta only) and FF3
+    results (three betas).
+
+    Args:
+        factor_results_df: Output of run_factor_analysis_for_assets or
+            run_factor_analysis_for_strategies (indexed by name, columns
+            include at least 'beta_mkt').
+        title: Chart title.
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If factor_results_df is empty or 'beta_mkt' is missing.
+    """
+    if factor_results_df.empty:
+        raise ValueError("plot_factor_betas: factor_results_df is empty")
+    if "beta_mkt" not in factor_results_df.columns:
+        raise ValueError(
+            "plot_factor_betas: 'beta_mkt' column is required"
+        )
+
+    names = factor_results_df.index.tolist()
+    n = len(names)
+    x = np.arange(n)
+
+    # Determine which betas are available and non-all-NaN
+    beta_cols = ["beta_mkt"]
+    labels = ["β_mkt (market)"]
+    colors = ["steelblue"]
+    if "beta_smb" in factor_results_df.columns and not factor_results_df["beta_smb"].isna().all():
+        beta_cols.append("beta_smb")
+        labels.append("β_smb (size)")
+        colors.append("darkorange")
+    if "beta_hml" in factor_results_df.columns and not factor_results_df["beta_hml"].isna().all():
+        beta_cols.append("beta_hml")
+        labels.append("β_hml (value)")
+        colors.append("mediumseagreen")
+
+    n_betas = len(beta_cols)
+    width = 0.75 / n_betas
+
+    fig, ax = plt.subplots(figsize=(max(10, n * 1.8), 6))
+
+    offsets = np.linspace(-(n_betas - 1) / 2, (n_betas - 1) / 2, n_betas) * width
+    for offset, col, label, color in zip(offsets, beta_cols, labels, colors):
+        vals = factor_results_df[col].fillna(0.0).values
+        ax.bar(
+            x + offset, vals, width,
+            label=label, color=color, edgecolor="black", linewidth=0.4,
+        )
+
+    ax.axhline(0.0, color="grey", linewidth=0.7, linestyle="--")
+    ax.axhline(1.0, color="black", linewidth=0.6, linestyle=":",
+               label="β = 1 reference")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=10, rotation=15, ha="right")
+    ax.set_ylabel("Factor Loading (β)", fontsize=11)
+    ax.set_title(title, fontsize=13)
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    logger.info(f"Factor betas chart created: {n} assets/strategies, {n_betas} factors")
+    return fig
+
+
+def plot_alpha_comparison(
+    factor_results_df: pd.DataFrame,
+    title: str = "Annualized Alpha",
+) -> plt.Figure:
+    """Bar chart of annualized alpha per asset or strategy with significance markers.
+
+    Bars are colored green for positive alpha and red for negative. An asterisk
+    (*) is added above bars where alpha is statistically significant (p < 0.05).
+
+    Args:
+        factor_results_df: Output of build_factor_summary_table or
+            run_factor_analysis_for_assets. Must contain 'alpha'.
+            Optionally 'p_alpha' for significance markers and
+            'alpha_significant' if build_factor_summary_table was called.
+        title: Chart title.
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If factor_results_df is empty or 'alpha' is missing.
+    """
+    if factor_results_df.empty:
+        raise ValueError("plot_alpha_comparison: factor_results_df is empty")
+    if "alpha" not in factor_results_df.columns:
+        raise ValueError(
+            "plot_alpha_comparison: 'alpha' column is required"
+        )
+
+    names = factor_results_df.index.tolist()
+    alphas = factor_results_df["alpha"].values
+    n = len(names)
+    x = np.arange(n)
+
+    has_significance = "alpha_significant" in factor_results_df.columns
+    significant = (
+        factor_results_df["alpha_significant"].values
+        if has_significance
+        else np.zeros(n, dtype=bool)
+    )
+
+    bar_colors = ["mediumseagreen" if a >= 0 else "tomato" for a in alphas]
+
+    fig, ax = plt.subplots(figsize=(max(9, n * 1.8), 5))
+
+    bars = ax.bar(
+        x, alphas,
+        color=bar_colors, edgecolor="black", linewidth=0.4, width=0.6,
+    )
+
+    for bar, val, sig in zip(bars, alphas, significant):
+        label_y = bar.get_height() if val >= 0 else bar.get_height() - 0.005
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            label_y + (0.002 if val >= 0 else -0.008),
+            f"{val:.2%}" + (" *" if sig else ""),
+            ha="center", va="bottom" if val >= 0 else "top",
+            fontsize=8.5,
+        )
+
+    ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(names, fontsize=10, rotation=15, ha="right")
+    ax.set_ylabel("Annualized Alpha", fontsize=11)
+    ax.set_title(title, fontsize=13)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.1%}"))
+
+    if has_significance:
+        ax.annotate(
+            "* significant at 5% (HC3 robust SE)",
+            xy=(0.01, 0.01), xycoords="axes fraction",
+            fontsize=8, color="grey",
+        )
+
+    plt.tight_layout()
+    logger.info(f"Alpha comparison chart created: {n} assets/strategies")
+    return fig
+
+
+def plot_factor_alpha_weights(
+    weights_df: pd.DataFrame,
+    title: str = "Factor Alpha Weighted Portfolio — Latest Window",
+) -> plt.Figure:
+    """Two-panel chart: portfolio weights (top) and alpha values (bottom).
+
+    Top panel: horizontal bars for asset weights (steelblue).
+    Bottom panel: alpha bars (green = positive, red = negative), with an
+        asterisk for statistically significant alphas (p_alpha < 0.05) when
+        the 'p_alpha' column is present.
+
+    Args:
+        weights_df: DataFrame indexed by ticker with columns 'weight' and
+            'alpha'. 'p_alpha' is optional but enables significance markers.
+            Typically produced by joining factor regression results with the
+            latest rolling weights.
+        title: Figure suptitle.
+
+    Returns:
+        matplotlib Figure object.
+
+    Raises:
+        ValueError: If weights_df is empty or missing 'weight'/'alpha'.
+    """
+    if weights_df.empty:
+        raise ValueError("plot_factor_alpha_weights: weights_df is empty")
+    for col in ("weight", "alpha"):
+        if col not in weights_df.columns:
+            raise ValueError(
+                f"plot_factor_alpha_weights: missing required column '{col}'. "
+                f"Available: {list(weights_df.columns)}"
+            )
+
+    tickers = weights_df.index.tolist()
+    n = len(tickers)
+    y_pos = np.arange(n)
+    weights = weights_df["weight"].values
+    alphas = weights_df["alpha"].values
+
+    has_p = "p_alpha" in weights_df.columns
+    significant = weights_df["p_alpha"].values < 0.05 if has_p else np.zeros(n, dtype=bool)
+
+    fig, axes = plt.subplots(2, 1, figsize=(9, max(6, n * 0.9)))
+    fig.suptitle(title, fontsize=13, y=1.01)
+    fig.subplots_adjust(hspace=0.5)
+
+    # Top: weight allocation
+    ax1 = axes[0]
+    bars1 = ax1.barh(y_pos, weights, color="steelblue", edgecolor="black", linewidth=0.4)
+    for bar, val in zip(bars1, weights):
+        ax1.text(
+            bar.get_width() + 0.004,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.1%}",
+            va="center", ha="left", fontsize=8.5,
+        )
+    ax1.set_yticks(y_pos)
+    ax1.set_yticklabels(tickers, fontsize=10)
+    ax1.set_xlabel("Weight", fontsize=10)
+    ax1.set_title("Portfolio Weights", fontsize=11)
+    ax1.set_xlim(0, max(weights.max() * 1.2, 0.05))
+
+    # Bottom: alpha values with significance markers
+    ax2 = axes[1]
+    bar_colors = ["mediumseagreen" if a >= 0 else "tomato" for a in alphas]
+    bars2 = ax2.bar(y_pos, alphas, color=bar_colors, edgecolor="black", linewidth=0.4, width=0.6)
+    for bar, val, sig in zip(bars2, alphas, significant):
+        label_y = bar.get_height() if val >= 0 else bar.get_height()
+        offset = 0.002 if val >= 0 else -0.002
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2,
+            label_y + offset,
+            f"{val:.2%}" + (" *" if sig else ""),
+            ha="center", va="bottom" if val >= 0 else "top", fontsize=8,
+        )
+    ax2.axhline(0.0, color="black", linewidth=0.8, linestyle="--")
+    ax2.set_xticks(y_pos)
+    ax2.set_xticklabels(tickers, fontsize=10)
+    ax2.set_ylabel("Annualized Alpha", fontsize=10)
+    ax2.set_title("Factor Alpha (FF3)", fontsize=11)
+    ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda y, _: f"{y:.1%}"))
+    if has_p:
+        ax2.annotate(
+            "* significant at 5% (HC3 robust SE)",
+            xy=(0.01, 0.01), xycoords="axes fraction",
+            fontsize=7.5, color="grey",
+        )
+
+    plt.tight_layout()
+    logger.info(f"Factor alpha weights chart created: {n} assets")
+    return fig
+
+
 def plot_price_series(prices: pd.DataFrame) -> plt.Figure:
     """Plot normalized (base-100) price series for all assets.
 

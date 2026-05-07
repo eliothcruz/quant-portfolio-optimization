@@ -360,6 +360,88 @@ def efficient_frontier(
     return frontier_df
 
 
+def factor_alpha_weighted_portfolio(
+    factor_results_df: pd.DataFrame,
+    max_weight: float = 0.4,
+    min_weight: float = 0.0,
+    alpha_col: str = "alpha",
+    p_value_col: str = "p_alpha",
+    require_significant_alpha: bool = False,
+) -> pd.Series:
+    """Construct a portfolio weighted proportionally to factor-model alpha.
+
+    Only assets with positive alpha receive weight. Optionally restricts to
+    statistically significant alphas (p < 0.05). Weights are proportional to
+    alpha magnitude, capped at max_weight, and renormalized to sum to 1.
+
+    When no eligible assets exist (all alphas non-positive, or no significant
+    alphas when required), falls back to equal weights with a warning.
+
+    Args:
+        factor_results_df: DataFrame indexed by ticker with factor regression
+            results. Must contain alpha_col and p_value_col.
+            Typically produced by run_factor_analysis_for_assets().
+        max_weight: Maximum weight per asset (default 0.4).
+        min_weight: Minimum weight for eligible assets (default 0.0; ineligible
+            assets receive zero weight regardless of this setting).
+        alpha_col: Column containing annualized alpha (default "alpha").
+        p_value_col: Column containing alpha p-value (default "p_alpha").
+        require_significant_alpha: If True, only assets with p < 0.05 are
+            eligible. Default False.
+
+    Returns:
+        pd.Series indexed by ticker (same index as factor_results_df) with
+        non-negative weights summing to 1.
+
+    Raises:
+        ValueError: If factor_results_df is empty or missing required columns.
+    """
+    if factor_results_df.empty:
+        raise ValueError("factor_alpha_weighted_portfolio: factor_results_df is empty")
+    for col in (alpha_col, p_value_col):
+        if col not in factor_results_df.columns:
+            raise ValueError(
+                f"factor_alpha_weighted_portfolio: missing column '{col}'. "
+                f"Available: {list(factor_results_df.columns)}"
+            )
+
+    tickers = list(factor_results_df.index)
+    n = len(tickers)
+    alphas = factor_results_df[alpha_col].copy()
+    p_values = factor_results_df[p_value_col].copy()
+
+    eligible = alphas > 0.0
+    if require_significant_alpha:
+        eligible &= p_values < 0.05
+
+    if not eligible.any():
+        logger.warning(
+            "factor_alpha_weighted_portfolio: no eligible assets "
+            f"(require_significant_alpha={require_significant_alpha}). "
+            "Falling back to equal weights."
+        )
+        return pd.Series(np.ones(n) / n, index=tickers, name="weight")
+
+    eligible_alphas = alphas[eligible]
+    raw_weights = eligible_alphas / eligible_alphas.sum()
+
+    weights = pd.Series(0.0, index=tickers, name="weight")
+    weights[eligible] = raw_weights
+
+    weights = weights.clip(upper=max_weight)
+    total = weights.sum()
+    if total > 0.0:
+        weights /= total
+
+    logger.info(
+        f"Factor alpha portfolio | eligible={int(eligible.sum())}/{n}  "
+        f"require_sig={require_significant_alpha}  "
+        f"max_w={max_weight}  "
+        f"top_alpha={eligible_alphas.max():.4f}"
+    )
+    return weights
+
+
 def black_litterman_max_sharpe_portfolio(
     mu_bl: pd.Series,
     cov_matrix: pd.DataFrame | np.ndarray,

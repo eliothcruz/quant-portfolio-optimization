@@ -271,3 +271,131 @@ for each rebalance date t:
 **Fallback behavior:** If the optimizer fails to converge for a given training window (rare with SLSQP and a well-conditioned Σ), the engine falls back to equal weights and logs a warning. This prevents NaN propagation in the return series.
 
 **Benchmark construction:** SPY returns are loaded from the same `returns.csv` and aligned to the backtest period by index intersection. The benchmark is buy-and-hold (no transaction costs applied).
+
+---
+
+## 8. Factor Models
+
+Factor models decompose asset returns into a component explained by systematic risk factors and an unexplained residual (alpha). The core question they answer is: *does a strategy generate returns because it takes systematic exposures that any investor could replicate cheaply, or because it captures genuine skill?*
+
+### CAPM (Single-Factor Model)
+
+The Capital Asset Pricing Model (Sharpe, 1964; Lintner, 1965) states that the expected excess return of an asset is proportional to its exposure to the market portfolio:
+
+```
+r_i − RF = α + β_mkt · MKT_RF + ε
+```
+
+Where:
+- `r_i − RF` — asset excess return (asset return minus risk-free rate)
+- `MKT_RF` — market excess return (market return minus risk-free rate)
+- `β_mkt` — market beta: sensitivity of the asset to market movements
+- `α` — intercept; the return unexplained by the market (Jensen's alpha)
+- `ε` — idiosyncratic residual
+
+**Beta interpretation:**
+- `β > 1`: asset amplifies market moves (high-beta, e.g., growth tech)
+- `β = 1`: asset moves in line with the market
+- `β < 1`: asset is defensive (dampens market moves, e.g., utilities, consumer staples)
+- `β < 0`: asset moves opposite to the market (rare in long-only equity portfolios)
+
+In this universe, AAPL and MSFT are expected to have `β > 1` (tech amplifies market risk), while KO is expected to have `β < 1` (defensive). SPY, by construction, should have `β ≈ 1`.
+
+### Fama-French 3-Factor Model (FF3)
+
+Fama and French (1993) documented that CAPM alpha is systematically related to two additional characteristics: firm size and book-to-market ratio. The FF3 model adds two factors:
+
+```
+r_i − RF = α + β_mkt · MKT_RF + β_smb · SMB + β_hml · HML + ε
+```
+
+Where:
+- `SMB` (Small Minus Big) — return spread between small-cap and large-cap stocks. Positive `β_smb` indicates the asset behaves like a small-cap stock (higher return in environments where small caps outperform).
+- `HML` (High Minus Low) — return spread between high book-to-market (value) and low book-to-market (growth) stocks. Positive `β_hml` indicates value-like behavior; negative indicates growth-like behavior.
+
+**Beta_smb interpretation** for this universe:
+- AAPL, MSFT, GOOG are large-cap growth stocks → expected `β_smb < 0` (they behave like the "Big" side of SMB)
+- KO is a large-cap defensive → expected `β_smb ≈ 0` or slightly negative
+
+**Beta_hml interpretation**:
+- AAPL, MSFT, GOOG are growth stocks (low book-to-market) → expected `β_hml < 0`
+- KO has more value characteristics → expected `β_hml > 0`
+
+### Alpha (Jensen's Alpha)
+
+The intercept `α` in the OLS regression represents the average return of the asset (or strategy) that is **not explained by the factor exposures**. A positive and statistically significant alpha indicates outperformance relative to what the factor loadings predict.
+
+**Statistical test:** The null hypothesis is `H₀: α = 0`. Rejection at the 5% level (p-value < 0.05, using HC3 heteroskedasticity-consistent standard errors) provides evidence of genuine abnormal return. Statistical significance requires both:
+- A t-statistic of magnitude > ~2 in absolute value
+- A sufficiently long sample (≥ 252 observations)
+
+**Annualization:** The daily alpha from the regression is multiplied by 252 to produce an annualized figure. This is approximate (the compounding effect is ignored) but standard in the literature.
+
+**Caution:** A significant alpha over a backtest period does not imply future alpha. With only 5 assets and 5 years of data, the multiple testing problem is severe — one of five assets would be expected to show `p < 0.05` by chance alone even if all true alphas are zero.
+
+### R² (Coefficient of Determination)
+
+R² measures the fraction of return variance explained by the factor model:
+
+```
+R² = 1 − Var(ε) / Var(r_i − RF)
+```
+
+- `R² ≈ 0.9` for SPY: almost entirely explained by market beta (by construction)
+- `R² ≈ 0.7–0.8` for large-cap stocks like AAPL, MSFT: mostly systematic
+- `R² ≈ 0.5` for KO: more idiosyncratic variation
+
+For strategies: Risk Parity and Min Variance typically have higher R² than Max Sharpe because they hold more diversified portfolios with less idiosyncratic exposure.
+
+### Unit Consistency
+
+Kenneth French distributes factor data in **percent** (0.31 = 0.31%). The pipeline computes returns in **decimal** (0.0031 = 0.31%). Setting `convert_percent_to_decimal: true` in `config/factors.yaml` divides all factor values by 100 before regression, ensuring both sides of the equation are in the same units. Running a regression with mixed units produces betas that are off by a factor of 100 — a silent but catastrophic error.
+
+---
+
+## 9. Factor-Aware Portfolio Construction
+
+### Motivation
+
+Standard mean-variance optimization weights assets by their full expected return `μ`. The factor-aware approach instead weights assets by their **abnormal return** — the component of expected return not explained by systematic risk factors. Factor exposure can be replicated cheaply via index instruments; only the unexplained component (alpha) justifies an active allocation tilt.
+
+### Alpha-Weighted Portfolio
+
+Given a rolling FF3 regression for each asset `i`:
+
+```
+r_i − RF = α_i + β_mkt,i · MKT_RF + β_smb,i · SMB + β_hml,i · HML + ε_i
+```
+
+Eligibility criteria:
+1. Positive alpha only: `α_i > 0`
+2. Optionally significant: additionally require `p_α,i < 0.05`
+
+Among eligible assets, raw proportional weights:
+
+```
+w_i_raw = α_i / Σ_j α_j     (sum over eligible j)
+```
+
+Cap and renormalize:
+
+```
+w_i = clip(w_i_raw, 0, max_weight) / Σ_j clip(w_j_raw, 0, max_weight)
+```
+
+Ineligible assets receive zero weight. If no assets are eligible, the portfolio falls back to equal weights with a logged warning.
+
+### Rolling Implementation
+
+The factor-aware strategy is embedded in the rolling backtest engine identically to other strategies — no look-ahead violation is possible because:
+
+1. The training window `returns[t-window:t]` ends at rebalance date `t` (exclusive)
+2. Factor data is aligned to the same window by date intersection
+3. The FF3 regression runs on the aligned `(T', n)` panel — `T'` is the count of common dates
+4. Alpha estimates from the in-sample regression determine weights for the **subsequent** period `[t, t_next)`
+
+### Limitations
+
+**Alpha estimation noise is as severe as return estimation noise.** With `T = 252` and a residual volatility of ~10% annualized, the standard error of a daily alpha estimate is approximately `0.6% / √252 ≈ 0.038%` daily, or ~9.5% annualized. A 5% annualized alpha estimate has a t-statistic well below 2 — statistically indistinguishable from zero. The `require_significant_alpha=False` default is appropriate for exploration but weights produced in this regime are noise-driven.
+
+**The strategy ignores covariance.** Unlike MVO, alpha-weighted portfolios do not account for `Σ`. Two highly correlated assets with similar alpha both receive positive weight, concentrating risk in a correlated cluster without penalty.

@@ -1,4 +1,4 @@
-"""Build risk and summary tables for assets and the portfolio.
+"""Build risk, summary, and factor exposure tables for assets and the portfolio.
 
 All risk metrics in these tables are computed at the daily horizon,
 consistent with the return series frequency. Mean return and volatility
@@ -240,3 +240,48 @@ def build_strategy_comparison_table(results: dict) -> pd.DataFrame:
         f"{len(df.columns)} metrics"
     )
     return df
+
+
+def build_factor_summary_table(factor_results_df: pd.DataFrame) -> pd.DataFrame:
+    """Augment a factor regression table with a significance flag for alpha.
+
+    Adds a boolean column 'alpha_significant' (True when p_alpha < 0.05)
+    to the regression results DataFrame produced by
+    factors.metrics.run_factor_analysis_for_assets or
+    factors.metrics.run_factor_analysis_for_strategies.
+
+    The table is returned sorted by annualized alpha descending so that
+    the highest-alpha assets/strategies appear first.
+
+    Args:
+        factor_results_df: DataFrame from run_factor_analysis_for_assets or
+            run_factor_analysis_for_strategies. Must contain at least the
+            columns 'alpha' and 'p_alpha'.
+
+    Returns:
+        Copy of factor_results_df with an additional 'alpha_significant'
+        column (bool), sorted by 'alpha' descending.
+
+    Raises:
+        ValueError: If factor_results_df is empty or missing required columns.
+    """
+    if factor_results_df.empty:
+        raise ValueError("build_factor_summary_table: factor_results_df is empty")
+
+    for col in ("alpha", "p_alpha"):
+        if col not in factor_results_df.columns:
+            raise ValueError(
+                f"build_factor_summary_table: missing required column '{col}'. "
+                f"Available: {list(factor_results_df.columns)}"
+            )
+
+    result = factor_results_df.copy()
+    result["alpha_significant"] = result["p_alpha"] < 0.05
+    result = result.sort_values("alpha", ascending=False)
+
+    n_sig = int(result["alpha_significant"].sum())
+    logger.info(
+        f"Factor summary table built: {len(result)} rows  "
+        f"alpha significant (p<0.05): {n_sig}/{len(result)}"
+    )
+    return result

@@ -4,7 +4,8 @@ Each rebalance period uses only historical data ending on the rebalance date
 (no look-ahead bias). Transaction costs are applied as a flat turnover charge
 on the first day of each new period.
 
-Supported strategies: "max_sharpe", "min_variance".
+Supported strategies: "max_sharpe", "min_variance", "max_sharpe_shrinkage",
+    "risk_parity", "factor_alpha_weighted".
 Supported rebalance frequencies: "D" (daily), "M" (monthly), "Q" (quarterly).
 """
 
@@ -14,7 +15,9 @@ from scipy.optimize import minimize
 
 from ..analytics.covariance import compute_covariance_matrix, compute_shrinkage_covariance
 from ..analytics.statistics import compute_mean_returns
+from ..factors.metrics import run_factor_analysis_for_assets
 from ..portfolio.constraints import full_investment_constraint, weight_bounds
+from ..portfolio.optimization import factor_alpha_weighted_portfolio
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +28,13 @@ _MIN_WINDOW_OBSERVATIONS = 30  # absolute floor to estimate covariance
 _FREQ_ALIASES: dict[str, str] = {"M": "ME", "Q": "QE"}
 
 _VALID_STRATEGIES = frozenset(
-    {"max_sharpe", "min_variance", "max_sharpe_shrinkage", "risk_parity"}
+    {
+        "max_sharpe",
+        "min_variance",
+        "max_sharpe_shrinkage",
+        "risk_parity",
+        "factor_alpha_weighted",
+    }
 )
 
 
@@ -95,8 +104,9 @@ def backtest_portfolio(
     max_weight: float = 0.4,
     min_weight: float = 0.0,
     transaction_cost: float = 0.001,
+    factors_df: pd.DataFrame | None = None,
 ) -> tuple[pd.Series, pd.DataFrame]:
-    """Simulate a rolling Markowitz portfolio with periodic rebalancing.
+    """Simulate a rolling portfolio with periodic rebalancing.
 
     At each rebalance date the model is re-estimated using the preceding
     `window` trading days. Weights are then applied to the subsequent period
@@ -110,11 +120,15 @@ def backtest_portfolio(
             "Q" quarterly. Passed to pd.DataFrame.resample().
         window: Number of trading days used to estimate mu and Sigma.
             Must be > number of assets.
-        strategy: "max_sharpe" or "min_variance".
+        strategy: One of "max_sharpe", "min_variance", "max_sharpe_shrinkage",
+            "risk_parity", "factor_alpha_weighted".
         max_weight: Maximum weight per asset (0 < max_weight <= 1).
         min_weight: Minimum weight per asset (0 <= min_weight).
         transaction_cost: Proportional cost applied to portfolio turnover
             at each rebalance (e.g. 0.001 = 10 bps).
+        factors_df: Factor DataFrame (DatetimeIndex, columns include MKT_RF,
+            SMB, HML, RF in decimal units). Required when
+            strategy="factor_alpha_weighted"; ignored otherwise.
 
     Returns:
         Tuple of:
@@ -124,12 +138,18 @@ def backtest_portfolio(
                                  (DatetimeIndex, columns=tickers)
 
     Raises:
-        ValueError: If strategy is unknown or window is too small.
+        ValueError: If strategy is unknown, window is too small, or
+            strategy="factor_alpha_weighted" without factors_df.
         RuntimeError: If no valid rebalance periods could be generated.
     """
     if strategy not in _VALID_STRATEGIES:
         raise ValueError(
             f"Unknown strategy '{strategy}'. Use one of: {sorted(_VALID_STRATEGIES)}"
+        )
+    if strategy == "factor_alpha_weighted" and factors_df is None:
+        raise ValueError(
+            "strategy='factor_alpha_weighted' requires factors_df. "
+            "Pass a factor DataFrame aligned to the same date range as returns_df."
         )
 
     n_assets = len(returns_df.columns)
@@ -172,15 +192,46 @@ def backtest_portfolio(
         if len(window_data) < max(_MIN_WINDOW_OBSERVATIONS, n_assets + 1):
             continue
 
-        # Estimate parameters from training window
-        mu = compute_mean_returns(window_data, annualize=True)
+        fallback_weights = np.ones(n_assets) / n_assets
 
-        if strategy == "max_sharpe_shrinkage":
-            cov_opt = compute_shrinkage_covariance(window_data, annualize=True)
-            new_weights = _optimize_constrained(mu, cov_opt, "max_sharpe", min_weight, max_weight)
+        if strategy == "factor_alpha_weighted":
+            common_dates = window_data.index.intersection(factors_df.index)
+            if len(common_dates) < _MIN_WINDOW_OBSERVATIONS:
+                logger.warning(
+                    f"Insufficient factor overlap at {rebal_date} "
+                    f"({len(common_dates)} obs < {_MIN_WINDOW_OBSERVATIONS}); "
+                    "falling back to equal weights"
+                )
+                new_weights = fallback_weights
+            else:
+                aligned_rets = window_data.loc[common_dates]
+                aligned_facs = factors_df.loc[common_dates]
+                try:
+                    factor_results = run_factor_analysis_for_assets(
+                        aligned_rets, aligned_facs, model="ff3"
+                    )
+                    w_series = factor_alpha_weighted_portfolio(
+                        factor_results, max_weight=max_weight, min_weight=min_weight
+                    )
+                    reindexed = w_series.reindex(tickers).fillna(0.0)
+                    total = reindexed.sum()
+                    new_weights = (reindexed / total).values if total > 0 else fallback_weights
+                except Exception as exc:
+                    logger.warning(
+                        f"factor_alpha_weighted failed at {rebal_date} ({exc}); "
+                        "falling back to equal weights"
+                    )
+                    new_weights = fallback_weights
         else:
-            cov = compute_covariance_matrix(window_data, annualize=True)
-            new_weights = _optimize_constrained(mu, cov, strategy, min_weight, max_weight)
+            # Estimate parameters from training window
+            mu = compute_mean_returns(window_data, annualize=True)
+            if strategy == "max_sharpe_shrinkage":
+                cov_opt = compute_shrinkage_covariance(window_data, annualize=True)
+                new_weights = _optimize_constrained(mu, cov_opt, "max_sharpe", min_weight, max_weight)
+            else:
+                cov = compute_covariance_matrix(window_data, annualize=True)
+                new_weights = _optimize_constrained(mu, cov, strategy, min_weight, max_weight)
+
         weights_records[rebal_date] = dict(zip(tickers, new_weights))
 
         # Application period: (rebal_date, next_rebal_date]
@@ -238,6 +289,7 @@ def backtest_portfolio_multi(
     window: int = 252,
     max_weight: float = 0.4,
     transaction_cost: float = 0.001,
+    factors_df: pd.DataFrame | None = None,
 ) -> dict[str, dict]:
     """Run backtest_portfolio for multiple strategies under identical conditions.
 
@@ -246,18 +298,22 @@ def backtest_portfolio_multi(
 
     Args:
         returns_df: DataFrame of daily asset returns.
-        strategies: List of strategy names to run. Defaults to all four:
-            ["min_variance", "max_sharpe", "max_sharpe_shrinkage", "risk_parity"].
+        strategies: List of strategy names to run. Defaults to the four MVO
+            strategies: ["min_variance", "max_sharpe", "max_sharpe_shrinkage",
+            "risk_parity"]. "factor_alpha_weighted" requires factors_df.
         rebalance_freq: Rebalance frequency passed to backtest_portfolio.
         window: Estimation window in trading days.
         max_weight: Maximum weight per asset (applied uniformly).
         transaction_cost: Proportional transaction cost per unit of turnover.
+        factors_df: Factor DataFrame required when "factor_alpha_weighted" is
+            in strategies. Ignored for all other strategies. Default None.
 
     Returns:
         Dict mapping strategy_name -> {"returns": pd.Series, "weights": pd.DataFrame}.
 
     Raises:
-        ValueError: If any strategy name is invalid.
+        ValueError: If any strategy name is invalid or "factor_alpha_weighted"
+            is requested without factors_df.
     """
     if strategies is None:
         strategies = ["min_variance", "max_sharpe", "max_sharpe_shrinkage", "risk_parity"]
@@ -279,6 +335,7 @@ def backtest_portfolio_multi(
             max_weight=max_weight,
             min_weight=0.0,
             transaction_cost=transaction_cost,
+            factors_df=factors_df,
         )
         results[strategy] = {"returns": port_ret, "weights": weights_df}
 

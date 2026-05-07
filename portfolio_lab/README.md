@@ -34,6 +34,7 @@ run_risk_report.py           → VaR, CVaR, correlation heatmap, distribution an
 run_backtest.py              → rolling single-strategy backtest with SPY benchmark
 run_strategy_comparison.py   → multi-strategy comparison under identical constraints
 run_black_litterman.py       → BL equilibrium prior + views → posterior optimization
+run_factor_analysis.py       → FF3 factor regressions: betas, alpha, R² per asset/strategy
 ```
 
 Each script is self-contained: reads from `data/processed/` and `outputs/tables/`, writes to `outputs/`. No script modifies upstream artifacts.
@@ -60,6 +61,7 @@ All solvers use `scipy.optimize.minimize` (SLSQP), long-only constraint `w_i ≥
 | Max Sharpe + Shrinkage | Same with Ledoit-Wolf Σ | μ, Σ_LW |
 | Risk Parity | min `Var(RC_i)`, `RC_i = w_i (Σw)_i` | Σ |
 | Black-Litterman Max Sharpe | Max Sharpe with μ_BL replacing μ_hist | μ_BL, Σ |
+| Factor Alpha Weighted | Proportional weights from rolling FF3 alpha | FF3 factors |
 
 ### Risk Analytics
 
@@ -96,6 +98,7 @@ portfolio_lab/
 │
 ├── config/
 │   ├── assets.yaml            # Ticker universe
+│   ├── factors.yaml           # Factor file path, model, scale settings
 │   ├── settings.yaml          # Dates, confidence level, price field
 │   └── views.yaml             # Black-Litterman investor views and parameters
 │
@@ -126,6 +129,7 @@ portfolio_lab/
     ├── analytics/             # returns, statistics, covariance, performance
     ├── backtesting/           # rolling engine, multi-strategy orchestration
     ├── data/                  # downloader, loader, cleaner, validator
+    ├── factors/               # factor data loader, FF3/CAPM regression, metrics
     ├── models/                # Black-Litterman model
     ├── portfolio/             # metrics, constraints, optimization, construction
     ├── risk/                  # VaR, CVaR/TVaR, stress scenarios

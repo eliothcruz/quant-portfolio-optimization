@@ -156,3 +156,76 @@ The central empirical message of this project is consistent with the academic li
 3. **Black-Litterman**: Bayesian regularization of `μ̂` toward a covariance-consistent prior; retains the Max Sharpe framework while reducing concentration
 
 None of these solutions is a panacea. Risk Parity requires accurate covariance estimation (but covariance is far more stable than means). Black-Litterman requires a valid prior and well-calibrated views. Both require out-of-sample validation over longer horizons to draw robust conclusions.
+
+---
+
+## 7. Phase 10A — Factor Exposure Analysis
+
+> **Status:** Module implemented; results pending execution with local factor data.
+>
+> Factor regression results will be populated here after running:
+> ```bash
+> python scripts/run_factor_analysis.py
+> ```
+> This requires placing Fama-French 3 Factor daily data in
+> `data/factors/fama_french_3_factors.csv`. See `config/factors.yaml`
+> for the expected format and download instructions.
+
+### Expected findings (directional, based on asset characteristics)
+
+**Asset-level betas (FF3):**
+
+| Asset | β_mkt (expected) | β_smb (expected) | β_hml (expected) | Character |
+|---|---|---|---|---|
+| AAPL | > 1 | < 0 | < 0 | Large-cap growth |
+| MSFT | > 1 | < 0 | < 0 | Large-cap growth |
+| GOOG | > 1 | < 0 | < 0 | Large-cap growth |
+| KO | < 1 | ≈ 0 | > 0 | Large-cap value/defensive |
+| SPY | ≈ 1 | ≈ 0 | ≈ 0 | Broad market (by construction) |
+
+**Strategy-level betas (FF3):**
+
+| Strategy | β_mkt (expected) | Character |
+|---|---|---|
+| Min Variance | < 1 | Underweights high-beta tech |
+| Risk Parity | < 1 | Balanced across vol-adjusted exposures |
+| Max Sharpe | > 1 | Overweights high-beta AAPL/MSFT |
+| Max Sharpe + Shrinkage | ≈ Max Sharpe | Similar concentration |
+
+**Alpha significance:** With only 5 years of daily data and 5 assets, finding statistically significant alpha (p < 0.05, HC3 robust SE) would require an annualized alpha of approximately 3–5% to exceed the noise level. Genuine alpha is extremely difficult to establish with this sample size — a non-significant alpha should not be interpreted as evidence of zero skill, only of insufficient statistical power.
+
+**Key diagnostic question:** If strategy alphas are statistically indistinguishable from zero and R² is high, the strategy's excess return is explained entirely by systematic factor exposure — which could be replicated via cheaper index instruments. If alpha is positive and significant, the strategy adds value beyond passive factor exposure.
+
+---
+
+## 8. Phase 10B — Factor-Aware Portfolio
+
+> **Status:** Strategy implemented and integrated into the backtest engine. Results pending execution with local factor data.
+>
+> To run (requires Fama-French factor file):
+> ```bash
+> python scripts/run_strategy_comparison.py
+> ```
+> When `data/factors/fama_french_3_factors.csv` is present, the script automatically includes `factor_alpha_weighted` in the comparison and saves:
+> - `outputs/tables/factor_alpha_weights_latest.csv` — last-window weights joined with FF3 regression results
+> - `outputs/figures/factor_alpha_weights_latest.png` — weight and alpha visualization
+
+### Strategy Description
+
+At each monthly rebalance, the engine:
+1. Runs Fama-French 3-Factor OLS regressions on the preceding 252-day window for each asset
+2. Keeps only assets with positive estimated alpha
+3. Assigns proportional weights to the alpha magnitudes
+4. Caps each weight at 40% and renormalizes
+
+No return forecasts or mean estimates are used — the portfolio is built entirely on the rolling in-sample alpha from the factor model.
+
+### Expected Findings (Directional)
+
+**Why alpha-weighting is unlikely to dominate in this sample:**
+
+- With T = 252 and 5 assets, the annualized standard error of alpha is approximately 9–10%. A measured alpha of 5% annualized has a t-statistic below 1 — statistically indistinguishable from zero. The weights are therefore driven primarily by estimation noise rather than genuine abnormal return.
+- The strategy ignores covariance structure. In a universe where AAPL, MSFT, and GOOG are highly correlated, concentrating weight in whichever tech name happened to have the highest in-sample alpha amplifies idiosyncratic and correlated risk simultaneously.
+- The key comparison is with **Risk Parity**, which avoids both `μ̂` and `α̂` entirely. If alpha-weighting produces worse risk-adjusted performance than Risk Parity, the result is consistent with the literature: noise in return estimates — whether raw or factor-adjusted — degrades realized performance.
+
+**What would constitute a meaningful positive result:** If `factor_alpha_weighted` achieves a Sharpe ratio meaningfully above `max_sharpe` (not just Risk Parity) with lower turnover, it would suggest that factor adjustment reduces the noise content of the return signal sufficiently to produce better weights than raw `μ̂`. This would be a strong empirical finding but requires out-of-sample validation beyond the 2020–2024 period.
